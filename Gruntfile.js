@@ -77,5 +77,6 @@ module.exports = function(grunt) {
 	// Run task functions to configure Grunt.
 	invokeConfigFn(taskConfigurations);
 	invokeConfigFn(registerDefinitions);
+        grunt.loadTask('grunt-mocha-istanbul');
 
 };

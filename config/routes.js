@@ -36,12 +36,16 @@ module.exports.routes = {
     view: 'homepage'
   },
   '/handshakeResponse': 'OperatorController.handshakeResponse',
+   '/testSocket': 'OperatorController.testSocket',
   '/initiateTransfer':'OperatorController.initiateTransfer',
   '/moh':'OperatorController.moh',
   '/revertMoh':'OperatorController.revertMoh',
   '/transferRequestAck':'OperatorController.transferRequestAck',
   '/joinCall':'OperatorController.joinCall',
-  '/getPendingTransferRequests':'OperatorController.getPendingTransferRequests'
+  '/getPendingTransferRequests':'OperatorController.getPendingTransferRequests',
+  '/sendMessage':'ChatController.sendMessage',
+  '/getChatConversation':'ChatController.getChatConversation',
+ '/test':'ChatController.testObjectRef'
   /***************************************************************************
   *                                                                          *
   * Custom routes here...                                                    *

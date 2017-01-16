@@ -139,10 +139,11 @@ module.exports.sockets = {
                     sails.log.info('counter @@@Disconnect for operator' + session.operatorId + ":" + counter);
                     if (counter == 0) {
                         //Logoff the operator.
-                        sails.controllers.operator.logout(session.operatorId,session.chatgroup, function (err, data) {
-                            if (err)
-                                return cb(err);
+                        sails.controllers.operator.logout(session.operatorId,session.chatgroup, function (data) {
+                            if (!data)
+                                return cb(null);
                             //session.destroy();
+                            sails.log.info('session.operatorId -Disconnect after logout' + JSON.stringify(data));
                             return cb(null, data);
                         });
                     }

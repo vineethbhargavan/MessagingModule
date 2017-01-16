@@ -7,12 +7,14 @@
   "dependencies": {
     "asterisk-manager": "^0.1.15",
     "ejs": "2.3.4",
-    "grunt": "0.4.5",
+    "es6-promise": "^4.0.5",
+    "grunt": "^0.4.5",
     "grunt-contrib-clean": "0.6.0",
     "grunt-contrib-coffee": "0.13.0",
     "grunt-contrib-concat": "0.5.1",
     "grunt-contrib-copy": "0.5.0",
     "grunt-contrib-cssmin": "0.9.0",
+    "grunt-contrib-jshint": "^1.1.0",
     "grunt-contrib-jst": "0.6.0",
     "grunt-contrib-less": "1.1.0",
     "grunt-contrib-uglify": "0.7.0",
@@ -26,11 +28,14 @@
     "sails-disk": "~0.10.9",
     "sails-mysql": "^0.11.5",
     "sails-postgresql": "^0.11.4",
+    "sails.io.js": "^1.1.4",
+    "socket.io-client": "^1.7.2",
     "socket.io-redis": "^2.0.1"
   },
   "scripts": {
     "debug": "node debug app.js",
-    "start": "node app.js"
+    "start": "node app.js",
+    "test": "node ./node_modules/mocha/bin/mocha test/bootstrap.test.js test/**/*.spec.js test/**/OperatorController.test.js test/**/ChatController.test.js"
   },
   "main": "app.js",
   "repository": {
@@ -38,5 +43,12 @@
     "url": "git://github.com/root/messaging.git"
   },
   "author": "root",
-  "license": ""
+  "license": "",
+  "devDependencies": {
+    "assert": "^1.4.1",
+    "grunt-mocha-istanbul": "^5.0.2",
+    "istanbul": "^0.4.5",
+    "mocha": "^3.2.0",
+    "sinon": "^1.17.7"
+  }
 }

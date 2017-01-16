@@ -1,15 +1,15 @@
 var ami_host = 'localhost';
-var manager = 'operatorComm'
+var manager = 'operatorComm';
 var password = 'abc123';
 var ami = new require('asterisk-manager')('5038', ami_host, manager, password, true);
 
 var pg = require('pg');
-var pgConString = "postgres://192.168.0.56/1300_staging"
+var pgConString = "postgres://192.168.0.56/1300_staging";
 var pg_client = new pg.Client(pgConString);
 pg_client.connect();
 
 
-if (ami != undefined) {
+if (ami !== undefined) {
     try {
         ami.keepConnected();
         ami.on('userevent', function (evt) {
@@ -170,7 +170,7 @@ module.exports = {
                 originateCallOnChannel(data.conference, data.customerChannel, data.operatorChannel, data.ticketId, context1, context2, data.transferee, data.transferer);
                 muteConfLeg(data.customerChannel, data.conference, action, function (status) {
                     if (status) {
-                        sails.sockets.broadcast(data.transferer, 'mohAck', data)
+                        sails.sockets.broadcast(data.transferer, 'mohAck', data);
                     }
                 });
             }
@@ -190,7 +190,7 @@ module.exports = {
     }, setHangupFlagOnOriginator: function (data) {
         setHangupFlagOnOriginator(data.operatorChannel, 'skip_hangup_actions', 11);
     }, checkValidCall: function (conference, callback) {
-        if(conference === undefined || conference == ""){
+        if(conference === undefined || conference === ""){
             return callback(false);
         }
         ami.action({

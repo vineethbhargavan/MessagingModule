@@ -4,8 +4,13 @@
  * @description :: Server-side logic for managing operators
  * @help        :: See http://sailsjs.org/#!/documentation/concepts/Controllers
  */
-
+var Promise = require('es6-promise').Promise;
 module.exports = {
+    testSocket: function (req, res) {
+        var roomId = req.param('operatorId');
+        sails.log.info('testSocket' + roomId);
+        res.send();
+    },
     handshakeResponse: function (req, res) {
         var roomId = req.param('operatorId');
         var chatgroup = req.param('chatgroup');
@@ -14,38 +19,16 @@ module.exports = {
         sails.log.info('join request' + values.operatorId);
         sails.log.info('SocketID' + sails.sockets.getId(req));
         if (req.isSocket) {
-            sails.sockets.join(req, chatgroup);
-            sails.sockets.join(req, roomId, function (err) {
-                if (err) {
-                    return res.serverError(err);
-                }
-                req.session.operatorId = roomId;
-                req.session.chatgroup = chatgroup;
-                res.send();
-                var roomNames = JSON.stringify(sails.sockets.socketRooms(req));
-                sails.log.info('Socket Rooms' + roomNames);
-                sails.log.info('Session obj during login' + JSON.stringify(req.session));
-                //create OperatorObj
-
-                Operator.create({operatorId: roomId}).exec(function (err, updated) {
-                    if (err) { //returns if an error has occured, ie id doesn't exist.
-                        sails.log.info('operator Update Error' + err);
-                    } else {
-                        sails.log.info('operator Updated' + JSON.stringify(updated));
-                        initialiseLoginParams(roomId, function (err, data) {
-                            if (err)
-                                return;
-                            sails.sockets.broadcast(chatgroup, 'updateOperatorList');
-                        });
-                    }
-                });
-            });
-            sails.sockets.subscribers(roomId, function (err, socket_ids) {
-                var counter = socket_ids.length;
-                sails.log.info('counter' + counter);
-            });
-            var availableRooms = JSON.stringify(sails.sockets.rooms());
-            sails.log.info('availableRooms' + availableRooms);
+            sails.log.info('availableRooms chatgroup' + chatgroup);
+            socketJoin(req, res, chatgroup)
+                    .then(createOperatorObj)
+                    .then(updateOpprf.bind({query: {id: roomId, flag: 1}}))
+                    .then(updateUsers.bind({query: {id: roomId, logged_in: 1, last_login: new Date()}}))
+                    .then(updateSocketSubscribers)
+                    .then(setSessionVariables.bind({req: req, res: res}))
+                    .catch(function (err) {
+                        sails.log.info('Error in Executing' + err);
+                    });
         }
     }, initiateTransfer: function (req) {
         var data = req.allParams();
@@ -53,113 +36,42 @@ module.exports = {
         if (data.transferee !== undefined) {
             //create A transferRequestObject
             //first check if the ticket is valid.
-            AsteriskInterfaceService.checkValidCall(data.conference, function (result) {
-                if (result) {
-                    TransferRequest.create(data).exec(function (err, updated) {
-                        if (err) { //returns if an error has occured, ie id doesn't exist.
-                            sails.log.info('TransferRequest Update Error' + err);
-                            sails.sockets.broadcast(data.transferer, 'transferRequestACK', data);
-                        } else {
-                            sails.log.info('TransferRequest Updated' + JSON.stringify(updated));
-                            Operator.findOne(data.transferee).populate('tickets').exec(function (err, requests) {
-                                if (err)
-                                    sails.sockets.broadcast(data.transferer, 'transferRequestACK', data);
-                                if (requests !== undefined) {
-                                    sails.log.info('Operator after TransferRequest Updated' + JSON.stringify(requests));
-                                    sails.sockets.broadcast(requests.operatorId, 'transferRequest', requests.tickets);
-                                } else {
-                                    sails.sockets.broadcast(updated.transferer, 'transferRequestACK', updated);
-                                }
-
-                            });
-                            //check if the ticket has been accepted by the transferee
-                            setTimeout(function () {
-                                TransferRequest.findOne(updated.ticketId).exec(function (err, ticketState) {
-                                    if (ticketState == undefined) {
-                                        return;
-                                    }
-                                    if (ticketState.ack == 0 || ticketState.ack == 400) {
-                                        sails.sockets.broadcast(ticketState.transferer, 'transferRequestACK', ticketState);
-                                        TransferRequest.destroy(ticketState).exec(function (err) {
-                                            if (err)
-                                                return;
-                                            sails.log.info('TransferRequest cleared for ticket id' + JSON.stringify(ticketState));
-                                            Operator.findOne(ticketState.transferee).populate('tickets').exec(function (err, requests) {
-                                                if (err)
-                                                    return;
-                                                sails.log.info('Tickets request after deleting :' + JSON.stringify(requests));
-                                                sails.sockets.broadcast(requests.operatorId, 'transferRequest', requests.tickets);
-                                            });
-                                        });
-                                    } else {
-                                        sails.log.info('Tickets SeTimeout complete without any action :');
-                                    }
-                                });
-                            }, 30000);
-                        }
+            checkValidCall(data)
+                    .then(createTransferReq)
+                    .then(notifyOperator)
+                    .then(waitForTransfereeAction)
+                    .then(findTransferRequest)
+                    .then(clearTransferReq)
+                    .then(notifyOperator)
+                    .catch(function (err) {
+                        sails.log.info(err);
                     });
-                } else {
-                    sails.log.info('transferRequest for Invalid/Inactive Call ', data.ticketId);
-                    sails.sockets.broadcast(data.transferer, 'transferRequestACK', data);
-                }
-            });
-
-
-            //AsteriskInterfaceService.initiateTransferAction(data);
         }
     }, logout: function (opid, chatgroup, callback) {
-        Opprf.update(opid, {id: opid, flag: 0, isbusy: 0}).exec(function (err, qUpdated) {
-            if (err) { //returns if an error has occured, ie id doesn't exist.
-                sails.log.info('Opprf Update Error' + err);
-                return callback(null);
-            } else {
-                sails.log.info('Opprf Updated' + JSON.stringify(qUpdated));
-                Operator.destroy({operatorId: opid}).exec(function (err) {
-                    if (err)
-                        return callback(null);
-                    sails.log.info("Operator Purge for " + opid);
-                    Users.update(opid, {id: opid, logged_in: 0, last_active: new Date()}).exec(function (err, qUpdated) {
-                        if (err)
-                            return callback(null);
-                        sails.log.info("Users updated for " + opid);
-                        sails.sockets.broadcast(chatgroup, 'updateOperatorList');
-                        return callback(null, opid);
-                    });
+        sails.log.info('Inside logout action');
+        updateOpprf(opid, {id: opid, flag: 0, isbusy: 0})
+                .then(updateUsers.bind({query: {id: opid, logged_in: 0, last_active: new Date()}}))
+                .then(findOperator)
+                .then(flushOutOperator)
+                .then(callback)
+                .catch(function (err) {
+                    sails.log.info(err);
                 });
-            }
-        });
-        //work on promise to bundle these requests
-
     }, transferRequestAck: function (req) {
         var data = req.allParams();
         sails.log.info('TransferRequest ACK received for' + JSON.stringify(data));
         if (data.ack === 200) {
-            //setHangupFlagOnOriginator(data.operatorChannel, 'skip_hangup_actions', 11);
             AsteriskInterfaceService.setHangupFlagOnOriginator(data);
-            //save the details in DB.
-            //set opprf to blocked.
-            Opprf.update(data.transferee, {id: data.transferee, isblocked: 1}).exec(function (err, qUpdated) {
-                if (err)
-                    return;
-                sails.log.info('TransferRequest ACK Accepted and op blocked' + JSON.stringify(qUpdated));
-                //sails.sockets.broadcast(requests.operatorId, 'transferRequest', requests.tickets);
-            });
+            updateOpprf(data.transferee, {id: data.transferee, isblocked: 1})
+                    .catch(function (err) {
+                        sails.log.info(err);
+                    });
         }
-        TransferRequest.update(data.ticketId, data).exec(function (err, updated) {
-            if (err)
-                return;
-            sails.log.info('TransferRequest ACK updated for ticket id' + JSON.stringify(updated));
-            sails.sockets.broadcast(updated[0].transferer, 'transferRequestACK', updated[0]);
-            Operator.findOne(updated[0].transferee).populate('tickets').exec(function (err, requests) {
-                if (err)
-                    return;
-                sails.log.info('transferRequestAck updating details to transferer :' + JSON.stringify(requests));
-                sails.log.info('transferRequestAck updating details to transferer :' + requests.operatorId);
-                sails.sockets.broadcast(requests.operatorId, 'transferRequest', requests.tickets);
-
-            });
-        });
-
+        transferRequestUpdate(data)
+                .then(notifyOperator)
+                .catch(function (err) {
+                    sails.log.info(err);
+                });
     }, joinCall: function (req) {
         var data = req.allParams();
         sails.log.info('joinCall received for' + JSON.stringify(data));
@@ -167,31 +79,14 @@ module.exports = {
 
     }, joinCallComplete: function (operatorId, ticketId) {
         sails.log.info('joinCallComplete for:' + operatorId);
-        TransferRequest.findOne(ticketId).exec(function (err, ticketState) {
-            if (err)
-                return;
-            TransferRequest.destroy(ticketState).exec(function (err) {
-                if (err)
-                    return;
-                Operator.findOne(operatorId).populate('tickets').exec(function (err, requests) {
-                    if (err)
-                        sails.sockets.broadcast(data.transferer, 'transferRequestACK', data);
-                    sails.log.info('Operator after TransferRequest Updated' + JSON.stringify(requests));
-                    sails.sockets.broadcast(requests.operatorId, 'transferRequest', requests.tickets);
-                    if (requests.tickets.length === 0) {
-                        //unblock the user
-                        Opprf.update(requests.operatorId, {id: requests.operatorId, isblocked: 0}).exec(function (err, qUpdated) {
-                            if (err)
-                                return;
-                            sails.log.info('Operator unblocked' + JSON.stringify(qUpdated));
-                        });
-                    }
-
+        findTransferRequest(ticketId)
+                .then(clearTransferReq)
+                .then(notifyOperator)
+                .then(checkTransferReqStatus)
+                .then(updateOpprf.bind({query: {id: operatorId, isblocked: 0}}))
+                .catch(function (err) {
+                    sails.log.info(err);
                 });
-
-            })
-
-        });
 
     }, moh: function (req) {
         sails.log.info('moh' + JSON.stringify(req.allParams()));
@@ -209,16 +104,241 @@ module.exports = {
                 sails.sockets.broadcast(requests.operatorId, 'transferRequest', requests.tickets);
         });
     }
+    
+
 };
 
-function initialiseLoginParams(opid, callback) {
-    Opprf.update(opid, {id: opid, flag: 1}).exec(function (err, qUpdated) {
-        if (err)
-            return callback(true);
-        Users.update(opid, {id: opid, logged_in: 1, last_login: new Date()}).exec(function (err, qUpdated) {
+var waitForTransfereeAction = function(data) {
+    return new Promise(function (resolve) {
+        setTimeout(function () {
+            return resolve(data.ticketId);
+        }, 3000);
+    });
+};
+
+var updateSocketSubscribers = function (roomId) {
+    return new Promise(function (resolve, reject) {
+        sails.log.info('&&&&&&&&&&&updateSocketSubscribers');
+        sails.sockets.subscribers(roomId, function (err, socket_ids) {
             if (err)
-                return callback(true);
-            return callback(false, true);
+                return reject('socketSubscribers not added');
+            var counter = socket_ids.length;
+            sails.log.info('counter' + counter);
+            var availableRooms = JSON.stringify(sails.sockets.rooms());
+            sails.log.info('availableRooms' + availableRooms);
+            return resolve();
         });
     });
-}
+};
+
+var socketJoin = function (req, res, chatgroup) {
+    return new Promise(function (resolve, reject) {
+        for (i = 0; i < chatgroup.length; i++) {
+            socketJoinAction(req, res, chatgroup[i]);
+        }
+        return resolve(req);
+    });
+};
+
+var socketJoinAction = function (req, res, room) {
+    sails.sockets.join(req, room, function (err) {
+        if (err) {
+            return reject(res.serverError(err));
+        }
+        sails.log.info('Socket Join' + room);
+    });
+};
+
+var setSessionVariables = function (req, res) {
+    res = this.res;
+    req = this.req;
+    return new Promise(function (resolve, reject) {
+        sails.log.info('%%%%%%%%%%%%%setSessionVariables');
+        req.session.operatorId = req.param('operatorId');
+        req.session.chatgroup = req.param('chatgroup');
+        var roomNames = JSON.stringify(sails.sockets.socketRooms(req));
+        sails.log.info('Socket Rooms' + roomNames);
+        sails.log.info('Session obj during login' + JSON.stringify(req.session));
+        return resolve(res.send());
+    });
+};
+
+var createOperatorObj = function (req) {
+    return new Promise(function (resolve, reject) {
+        var roomId = req.param('operatorId');
+        var chatgroup = req.param('chatgroup');
+        Operator.create({operatorId: roomId, chatgroups: chatgroup}).exec(function (err, updated) {
+            if (err) { //returns if an error has occured, ie id doesn't exist.
+                sails.log.info('operator Update Error' + err);
+//                for (var i = 0; i < chatgroup.length; i++) {
+//                    sails.log.info('Operator Rooms' + chatgroup[i]);
+//                    sails.sockets.broadcast(chatgroup[i], 'updateOperatorList');
+//                }
+                return reject(err);
+            } else {
+                sails.log.info('operator Updated' + JSON.stringify(updated));
+                for (var i = 0; i < chatgroup.length; i++) {
+                    sails.log.info('Operator Rooms' + chatgroup[i]);
+                    sails.sockets.broadcast(chatgroup[i], 'updateOperatorList', chatgroup[i]);
+                }
+                return resolve(roomId);
+            }
+        });
+    });
+};
+
+var updateOpprf = function (opid, query) {
+    if (query === undefined)
+        query = this.query;
+    sails.log.info('updateOpprf' + JSON.stringify(query));
+    return new Promise(function (resolve, reject) {
+        Opprf.update(opid, query).exec(function (err, updated) {
+            if (err)
+                return reject(err);
+            sails.log.info('updateOpprf updated' + JSON.stringify(updated));
+            return resolve(opid);
+        });
+    });
+};
+
+var updateUsers = function (opid, query) {
+    if (query === undefined)
+        query = this.query;
+    return new Promise(function (resolve, reject) {
+        Users.update(opid, query).exec(function (err) {
+            if (err)
+                return reject(err);
+            return resolve(opid);
+        });
+    });
+};
+
+var flushOutOperator = function (operator) {
+    var chatgroup = operator.chatgroups;
+    return new Promise(function (resolve, reject) {
+        Operator.destroy({operatorId: operator.operatorId}).exec(function (err) {
+            if (err)
+                return reject(err);
+            sails.log.info("Operator Purge for " + operator.operatorId);
+            for (var i = 0; i < chatgroup.length; i++) {
+                sails.log.info('Operator Rooms' + chatgroup[i]);
+                sails.sockets.broadcast(chatgroup[i], 'updateOperatorList', chatgroup[i]);
+            }
+            return resolve(operator);
+        });
+    });
+};
+
+//For initiateTransfer Request
+var checkValidCall = function (data) {
+    return new Promise(function (resolve, reject) {
+        AsteriskInterfaceService.checkValidCall(data.conference, function (result) {
+            if (result) {
+                sails.log.info('checkValidCall validcall ');
+                return resolve(data);
+            } else {
+                sails.log.info('transferRequest for Invalid/Inactive Call ', data.ticketId);
+                sails.sockets.broadcast(data.transferer, 'transferRequestACK', data);
+                return reject('not a valid call' + data.ticketId);
+            }
+        });
+    });
+};
+
+var createTransferReq = function (data) {
+    return new Promise(function (resolve, reject) {
+        TransferRequest.create(data).exec(function (err, updated) {
+            if (err) { //returns if an error has occured, ie id doesn't exist.
+                sails.log.info('TransferRequest Update Error' + err);
+                sails.sockets.broadcast(data.transferer, 'transferRequestACK', data);
+                return reject('TransferRequest Update Error' + err);
+            } else {
+                return resolve(updated);
+            }
+        });
+    });
+};
+
+var findOperator = function (opid) {
+    return new Promise(function (resolve, reject) {
+        Operator.findOne(opid).populate('tickets').exec(function (err, requests) {
+            if (err) {
+                return reject('Invalid Operator');
+            }
+            if (requests !== undefined) {
+                return resolve(requests);
+            } else {
+                return reject('No Valid Operator');
+            }
+        });
+    });
+};
+
+var notifyOperator = function (data) {
+    return new Promise(function (resolve, reject) {
+        Operator.findOne(data.transferee).populate('tickets').exec(function (err, requests) {
+            if (err) {
+                sails.sockets.broadcast(data.transferer, 'transferRequestACK', data);
+                return reject('Invalid Operator');
+            }
+            if (requests !== undefined) {
+                sails.log.info('Operator after TransferRequest Updated' + JSON.stringify(requests));
+                sails.sockets.broadcast(requests.operatorId, 'transferRequest', requests.tickets);
+                return resolve(data);
+            } else {
+                sails.sockets.broadcast(data.transferer, 'transferRequestACK', data);
+                return resolve(data);
+            }
+        });
+    });
+};
+
+
+var findTransferRequest = function (ticketId) {
+    return new Promise(function (resolve, reject) {
+        TransferRequest.findOne(ticketId).exec(function (err, ticketState) {
+            if (err)
+                return reject('Transfer request DB error');
+            if (ticketState === undefined) {
+                return reject('Transfer request DB Invalid');
+            } else if (ticketState.ack === 0 || ticketState.ack === 400) {
+                sails.sockets.broadcast(ticketState.transferer, 'transferRequestACK', ticketState);
+                return resolve(ticketState);
+            } else {
+                return reject('Tickets SeTimeout complete without any action :');
+            }
+        });
+    });
+};
+
+var clearTransferReq = function (ticketState) {
+    return new Promise(function (resolve, reject) {
+        TransferRequest.destroy(ticketState).exec(function (err) {
+            if (err)
+                return reject(err);
+            sails.log.info('TransferRequest cleared for ticket id' + JSON.stringify(ticketState));
+            return resolve(ticketState);
+        });
+    });
+
+};
+var transferRequestUpdate = function (data) {
+    return new Promise(function (resolve, reject) {
+        TransferRequest.update(data.ticketId, data).exec(function (err, updated) {
+            if (err)
+                return reject(err);
+            sails.log.info('TransferRequest ACK updated for ticket id' + JSON.stringify(updated));
+            sails.sockets.broadcast(updated[0].transferer, 'transferRequestACK', updated[0]);
+            resolve(updated[0]);
+        });
+    });
+};
+var checkTransferReqStatus = function (requests) {
+    return new Promise(function (resolve, reject) {
+        if (requests.tickets.length === 0) {
+            resolve(requests.operatorId);
+        } else {
+            reject(requests.tickets.length);
+        }
+    });
+};

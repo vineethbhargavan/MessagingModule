@@ -18,6 +18,9 @@ module.exports = {
         tickets: {
             collection: 'TransferRequest',
             via: 'transferee'
+        },
+        chatgroups:{
+            type:'array'
         }
     }
 };
